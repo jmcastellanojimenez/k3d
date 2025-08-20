@@ -1,0 +1,189 @@
+name: Deploy EcoTrack Platform
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'platform/**'
+      - 'scripts/**'
+      - '.github/workflows/deploy-platform.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'platform/**'
+      - 'scripts/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  CLUSTER_NAME: ecotrack-platform
+  KUBECONFIG: ${{ github.workspace }}/.kube/config
+
+jobs:
+  validate:
+    name: Validate Configurations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Kubernetes tools
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.12.0'
+
+      - name: Validate Kubernetes manifests
+        run: |
+          find . -name "*.yaml" -o -name "*.yml" | grep -E "(k8s/|platform/)" | while read file; do
+            echo "Validating $file"
+            kubectl --dry-run=client --validate=true apply -f "$file" || echo "Warning: Could not validate $file"
+          done
+
+      - name: Lint Helm charts
+        run: |
+          if [ -d "infrastructure/helm-charts" ]; then
+            for chart in infrastructure/helm-charts/*/; do
+              if [ -d "$chart" ]; then
+                echo "Linting $chart"
+                helm lint "$chart"
+              fi
+            done
+          fi
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [validate, security-scan]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    environment: development
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup k3d
+        uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          args: >-
+            --agents 2
+            --port "80:80@loadbalancer"
+            --port "443:443@loadbalancer"
+            --k3s-arg "--disable=traefik@server:*"
+
+      - name: Setup Kubernetes tools
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.12.0'
+
+      - name: Wait for cluster
+        run: |
+          kubectl cluster-info
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      - name: Deploy platform
+        run: |
+          chmod +x scripts/deploy-platform.sh
+          ./scripts/deploy-platform.sh
+        timeout-minutes: 30
+
+      - name: Run platform tests
+        run: |
+          if [ -f "tests/platform/platform-tests.sh" ]; then
+            chmod +x tests/platform/platform-tests.sh
+            ./tests/platform/platform-tests.sh
+          fi
+
+      - name: Check platform status
+        run: |
+          chmod +x scripts/platform-status.sh
+          ./scripts/platform-status.sh
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [validate, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --region us-west-2 --name ecotrack-staging
+
+      - name: Deploy to staging
+        run: |
+          kubectl apply -k gitops/environments/staging/
+
+      - name: Wait for deployment
+        run: |
+          kubectl rollout status deployment/ecotrack-demo -n ecotrack-staging --timeout=600s
+
+      - name: Run smoke tests
+        run: |
+          if [ -f "tests/e2e/smoke-tests.sh" ]; then
+            chmod +x tests/e2e/smoke-tests.sh
+            ./tests/e2e/smoke-tests.sh staging
+          fi
+
+  notification:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-staging]
+    if: always()
+    steps:
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#ecotrack-deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

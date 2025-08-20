@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecotrack-demo
+  namespace: ecotrack-dev
+  labels:
+    app: ecotrack-demo
+  annotations:
+    cert-manager.io/cluster-issuer: ecotrack-ca-issuer
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - demo.ecotrack.local
+    secretName: demo-tls
+  rules:
+  - host: demo.ecotrack.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ecotrack-demo
+            port:
+              number: 80

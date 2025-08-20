@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecotrack-service-config
+  namespace: ecotrack-dev
+  labels:
+    app: ecotrack-service
+data:
+  # Database Configuration
+  DB_HOST: "postgresql"
+  DB_PORT: "5432"
+  DB_NAME: "ecotrack"
+  
+  # Redis Configuration
+  REDIS_HOST: "redis-master"
+  REDIS_PORT: "6379"
+  
+  # Kafka Configuration
+  KAFKA_BROKER: "kafka:9092"
+  KAFKA_CLIENT_ID: "ecotrack-service"
+  KAFKA_GROUP_ID: "ecotrack-group"
+  
+  # Monitoring
+  PROMETHEUS_PORT: "9090"
+  METRICS_PATH: "/metrics"
+  
+  # Feature Flags
+  ENABLE_TRACING: "true"
+  ENABLE_METRICS: "true"
+  ENABLE_HEALTH_CHECKS: "true"
+  
+  # External APIs
+  EXTERNAL_API_URL: "https://api.example.com"

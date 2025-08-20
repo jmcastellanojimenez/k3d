@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecotrack-alerts
+  namespace: monitoring
+  labels:
+    app: prometheus
+data:
+  ecotrack.yml: |
+    groups:
+    - name: ecotrack-platform
+      rules:
+      - alert: EcoTrackServiceDown
+        expr: up{job="kubernetes-service-endpoints",service=~"ecotrack-.*"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EcoTrack service {{ $labels.service }} is down"
+          description: "EcoTrack service {{ $labels.service }} in namespace {{ $labels.namespace }} has been down for more than 5 minutes."
+
+      - alert: EcoTrackHighErrorRate
+        expr: |
+          (
+            sum(rate(istio_requests_total{destination_service_name=~"ecotrack-.*",response_code!~"2.."}[5m])) by (destination_service_name) /
+            sum(rate(istio_requests_total{destination_service_name=~"ecotrack-.*"}[5m])) by (destination_service_name)
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate for {{ $labels.destination_service_name }}"
+          description: "Error rate for {{ $labels.destination_service_name }} is {{ $value }}% which is above the 5% threshold."
+
+      - alert: EcoTrackHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(istio_request_duration_milliseconds_bucket{destination_service_name=~"ecotrack-.*"}[5m])) by (destination_service_name, le)
+          ) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency for {{ $labels.destination_service_name }}"
+          description: "95th percentile latency for {{ $labels.destination_service_name }} is {{ $value }}ms which is above the 1000ms threshold."
+
+      - alert: EcoTrackPodCrashLooping
+        expr: |
+          rate(kube_pod_container_status_restarts_total{namespace="ecotrack-dev"}[15m]) * 60 * 15 > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.pod }} is crash looping"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is restarting frequently."
+
+      - alert: EcoTrackDatabaseConnection
+        expr: |
+          postgresql_up{service="postgresql"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL database connection is failing."
+
+      - alert: EcoTrackRedisConnection
+        expr: |
+          redis_up{service="redis-master"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis connection is failing."
+
+      - alert: EcoTrackKafkaConnection
+        expr: |
+          kafka_server_brokertopicmetrics_messagesinpersec{service="kafka"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka seems inactive"
+          description: "Kafka broker is not processing messages."
+
+    - name: infrastructure
+      rules:
+      - alert: NodeMemoryUsageHigh
+        expr: |
+          (
+            (node_memory_MemTotal_bytes - node_memory_MemFree_bytes - node_memory_Buffers_bytes - node_memory_Cached_bytes) / node_memory_MemTotal_bytes * 100
+          ) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on node {{ $labels.instance }}"
+          description: "Memory usage on node {{ $labels.instance }} is {{ $value }}%"
+
+      - alert: NodeCPUUsageHigh
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on node {{ $labels.instance }}"
+          description: "CPU usage on node {{ $labels.instance }} is {{ $value }}%"
+
+      - alert: NodeDiskSpaceUsageHigh
+        expr: |
+          (
+            (node_filesystem_size_bytes{fstype!="tmpfs"} - node_filesystem_free_bytes{fstype!="tmpfs"}) / node_filesystem_size_bytes{fstype!="tmpfs"} * 100
+          ) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on node {{ $labels.instance }}"
+          description: "Disk usage on {{ $labels.device }} at {{ $labels.instance }} is {{ $value }}%"

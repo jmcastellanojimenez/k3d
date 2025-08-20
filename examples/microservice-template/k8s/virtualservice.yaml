@@ -1,0 +1,63 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ecotrack-service
+  namespace: ecotrack-dev
+  labels:
+    app: ecotrack-service
+spec:
+  hosts:
+  - ecotrack-service
+  - api.ecotrack.local
+  gateways:
+  - ecotrack-gateway
+  - mesh
+  http:
+  - match:
+    - uri:
+        prefix: "/api/v1/service"
+    rewrite:
+      uri: "/api/v1"
+    route:
+    - destination:
+        host: ecotrack-service
+        port:
+          number: 80
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 5s
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+    timeout: 10s
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ecotrack-service
+  namespace: ecotrack-dev
+  labels:
+    app: ecotrack-service
+spec:
+  host: ecotrack-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        maxRequestsPerConnection: 10
+    loadBalancer:
+      simple: LEAST_CONN
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+  - name: v1
+    labels:
+      version: v1

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ecotrack-demo
+  namespace: ecotrack-dev
+  labels:
+    app: ecotrack-demo
+spec:
+  selector:
+    app: ecotrack-demo
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  type: ClusterIP
